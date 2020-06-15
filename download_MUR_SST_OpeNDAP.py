@@ -5,6 +5,7 @@ import os
 from datetime import datetime
 from datetime import timedelta
 import urllib
+# import progressbar
 # import threading
 
 
@@ -15,11 +16,14 @@ def gen_dates(date, hour=9):
     de objetos datetime.
     """
     from dateutil import rrule
+    if not isinstance(date, list):
+        date = [date]
     if len(date) > 1 and all([len(item) for item in date]):
         start = datetime.strptime(date[0], r'%d/%m/%Y')
         end = datetime.strptime(date[1], r'%d/%m/%Y')
         dtList = list(
-            rrule.rrule(freq=rrule.DAILY, dtstart=start, interval=1, until=end)
+            rrule.rrule(
+                freq=rrule.DAILY, dtstart=start, interval=1, until=end)
         )
         return [d.replace(hour=hour) for d in dtList]
     else:
@@ -52,16 +56,17 @@ def boundingAreaIndex(lonLim, latLim,
 
     import numpy as np
 
-    lonLim, latLim = [float(l) for l in lonLim], [float(l) for l in latLim]
+    lonLim = [float(l) for l in lonLim]
+    latLim = [float(l) for l in latLim]
 
     lonLim.sort()
     latLim.sort()
 
     ilon = [int((lonLim[0] - lonRange[0] - lonRes) / lonRes),
-            int((lonLim[1] - lonRange[0]) / lonRes - 1)]
+            int((lonLim[1] - lonRange[0]) / lonRes)]
 
     ilat = [int((latLim[0] - latRange[0] - latRes) / latRes),
-            int((latLim[1] - latRange[0]) / latRes - 1)]
+            int((latLim[1] - latRange[0]) / latRes)]
 
     return [ilon, ilat]
 
@@ -122,7 +127,11 @@ if __name__ == "__main__":
         # Using urllib to download.
         try:
 
+            print(f'Downloading: {fname}')
+
             urllib.request.urlretrieve(furl, filename=f'MURdata/{fname}')
+
+            print('Downloaded!')
 
             # Using the terminal command "wget" to download.
 
@@ -132,4 +141,6 @@ if __name__ == "__main__":
 
         except HTTPError:
 
-            raise(f'Verifique:\n\n\t{url}\n\n\t{ncTail}')
+            raise('Verifique:'
+                  f'\n\n\t{url}'
+                  f'\n\n\t{ncTail}')
