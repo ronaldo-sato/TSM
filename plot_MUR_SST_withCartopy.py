@@ -1,12 +1,16 @@
 # -*- coding: utf-8 -*-
 import os
-import json
 from datetime import datetime
 import netCDF4 as nc
 import xarray as xr
 import numpy as np
-from mpl_toolkits.basemap import Basemap
 import matplotlib.pyplot as plt
+import matplotlib.ticker as mticker
+import cartopy.crs as ccrs
+import cartopy.feature as cfeature
+# from cartopy.mpl.gridliner import LONGITUDE_FORMATTER, LATITUDE_FORMATTER
+from cartopy.mpl.geoaxes import GeoAxes
+from mpl_toolkits.axes_grid1 import AxesGrid
 
 
 def select_files(date=None, fpath='MURdata/', pattern='.nc'):
@@ -57,7 +61,7 @@ def linear_scale(data, scale_factor, offset):
     return (scale_factor * data + offset)
 
 
-def load_image(fname, K2degC=273.15, scale=False):
+def load_image_netCDF(fname, K2degC=273.15, scale=False):
     """
     Load MUR dataset Sea Surface Temperatura from a netCDF file.
     """
@@ -93,22 +97,31 @@ def load_image(fname, K2degC=273.15, scale=False):
     return date, lon[ilon], lat[ilat], sst - K2degC
 
 
-def load_image_xrarray(fname, K2degC=273.15):
+def load_image_xarray(fname, K2degC=273.15):
 
-    dataset = xr.open_dataset(fname)
+    if isinstance(fname, str):
+
+        dataset = xr.open_dataset(fname)
+
+    elif isinstance(fname, list):
+
+        dataset = xr.open_mfdataset(fname, combine='by_coords')
 
     sst = dataset['analysed_sst'].sel(
-        lat=slice(*latLim), lon=slice(*lonLim)).drop('time') - K2degC
+        lat=slice(*latLim), lon=slice(*lonLim)
+        ) - K2degC
 
-    return lon, lat, sst
+    sst.attrs['units'] = 'degC'
+    sst.attrs['long_name'] = dataset.analysed_sst.attrs['long_name']
+
+    return sst
 
 
 def get():
     import xarray as xr
-    # mur = xr.open_dataset(fname, mur.mask_and_scale=True)
+    mur = xr.open_dataset(fname, mask_and_scale=True)
     # mur.values, mur.var,  mur.dims, mur.coords, mur.attrs
-    sst = mur.analysed_sst
-    sst = sst.sel(
+    sst = mur.analysed_sst.sel(
         lat=slice(*latLim), lon=slice(*lonLim)).dropna(dim='time') - 273.15
     return None
 
@@ -179,8 +192,9 @@ def extract_etopo_bathy(
 
     with gzip.open(fname) as gzfile:
         with nc.Dataset(
-            'justagzfakename', mode='r', memory=gzfile.read()
+            'justafakename', mode='r', memory=gzfile.read()
         ) as ncfile:
+
             dxdy = ncfile['spacing'][0]
             lon = np.arange(*ncfile['x_range'][:] + [0, dxdy], dxdy)
             lat = np.arange(*ncfile['y_range'][:] + [0, dxdy], dxdy)
@@ -190,9 +204,11 @@ def extract_etopo_bathy(
             z = ncfile['z']
 
             if order == 'C':
+
                 zz = np.reshape(z, ncfile['dimension'][::-1], order='C')
 
             elif order == 'F':
+
                 zz = np.transpose(
                     np.reshape(z, ncfile['dimension'][:], order='F'))
 
@@ -230,7 +246,10 @@ def get_cube(fname='../etopo1/ETOPO1_Ice_g_gdal.grd.gz'):
     return bathy
 
 
-def make_map(**kwargs):
+def make_cartopy(
+        projection=ccrs.Mercator(),
+        resolution='10m', label_step=2,
+        **kwargs):
 
     kw_fig = dict(figsize=(8, 6), facecolor='w')
 
@@ -238,84 +257,79 @@ def make_map(**kwargs):
         key: kwargs.get(key, value)
         for key, value in kw_fig.items()}
 
-    fig, ax = plt.subplots(**kw_fig)
+    fig, ax = plt.subplots(
+        subplot_kw=dict(projection=projection), **kw_fig)
 
-    m = Basemap(llcrnrlon=lonLim[0],
-                llcrnrlat=latLim[0] - 1e-7,
-                urcrnrlon=lonLim[1],
-                urcrnrlat=latLim[1] + 1e-7,
-                projection='merc',
-                resolution='h',
-                area_thresh=10)
+    extent = [*lonLim, *latLim]
+    ax.set_extent(extent, crs=ccrs.PlateCarree())
 
-    m.ax = ax
-    m.drawcoastlines()
-    m.fillcontinents(color='.7', lake_color='blue')
-    # m.shadedrelief(scale=.5)
-    # m.etopo(scale=.5)
+    ax.coastlines(resolution=resolution, color='grey', zorder=3)
+    # coastline = cfeature.GSHHSFeature(scale='intermediate')
+    # ax.add_feature(coastline)
 
-    xwidth, ywidth = m(lonLim[1] - lonLim[0], latLim[1] - latLim[0])
+    ax.add_feature(
+        cfeature.LAND.with_scale(resolution), facecolor='.85', zorder=2)
+    # ax.add_feature(
+    #     cfeature.LAKES.with_scale(resolution), edgecolor='grey')
+    # ax.stock_img()  # add an underlay image
 
-    meridians = np.arange(lonLim[0], lonLim[1] + 1, 2)
+    draw_labels = (projection == ccrs.PlateCarree() or
+                   projection == ccrs.Mercator())
 
-    xticks = m.drawmeridians(meridians, linewidth=0.3,
-                             labels=[0, 0, 0, 1], yoffset=.004*ywidth)
+    gl = ax.gridlines(
+        crs=ccrs.PlateCarree(),
+        draw_labels=draw_labels,
+        xlocs=range(
+            *map(int, [lonLim[0], lonLim[1] + label_step]),
+            label_step),
+        ylocs=range(
+            *map(int, [latLim[0], latLim[1] + label_step]),
+            label_step),
+        # xformatter=LONGITUDE_FORMATTER,
+        # yformatter=LATITUDE_FORMATTER,
+        linestyle='--', linewidth=.8, color='k', alpha=0.2, zorder=3)
 
-    parallels = np.arange(latLim[0], latLim[1] + 1, 2)
+    gl.top_labels = gl.right_labels = False
 
-    yticks = m.drawparallels(parallels, linewidth=0.3,
-                             labels=[1, 0, 0, 0])
-
-    return fig, ax, m
+    return fig, ax
 
 
-def plot_map(
-        date, lon, lat, sst,
-        title=None, ctitle=None,
-        lSST=(None, None), **kwargs):
+def plot_data(da, title=None, ctitle=None,
+              lSST=(None, None), SAVE=False, **kwargs):
 
     # kwargs = dict(figsize=(10, 8), facecolor='w')
     # fig, ax, m = make_map(**kwargs)
 
-    fig, ax, m = make_map()
+    fig, ax = make_cartopy()
 
     fig.subplots_adjust(left=.03)
-
-    x, y = m(*np.meshgrid(lon, lat))
 
     cmap = plt.cm.Spectral_r
     # cmap = cmb.GMT_no_green_r
 
-    cm = m.pcolormesh(x, y, sst, cmap=cmap,
-                      vmin=lSST[0], vmax=lSST[1], zorder=1)
+    cbar_ax = fig.add_axes([.87, .3, .01, .4])
 
-    kw_colorbar = dict(location='right', size='100%', pad='0%',
-                       extend='both')
-    # kw_colorbar = dict(orientation='vertical',
-    #                    fraction=.018, pad=.03, shrink=1.2, extend='both')
+    if da.name is 'analysed_sst':
 
-    kw_colorbar = {
-        key: kwargs.get(key, value)
-        for key, value in kw_colorbar.items()}
+        da.plot(
+            ax=ax, transform=ccrs.PlateCarree(), robust=True,
+            vmin=lSST[0], vmax=lSST[1], cmap=cmap,
+            cbar_ax=cbar_ax, zorder=1,
+            cbar_kwargs={
+                'shrink': .4,
+                'label': f'{da.name} [{da.units}]',
+                'extend': 'both'})
 
-    cax = fig.add_axes([.85, .3, .02, .4])
-    _ = cax.axis('off')
+    elif da.name is 'gradient_mag_sst':
 
-    cbar = m.colorbar(cm, ax=cax, **kw_colorbar)
-    # cbar = plt.colorbar(cm, ax=ax, **kw_colorbar)
-
-    kw_units = dict(fontsize=12, fontweight='roman',
-                    horizontalalignment='center',
-                    verticalalignment='top')
-
-    kw_units = {
-        key: kwargs.get(key, value)
-        for key, value in kw_units.items()}
-
-    # cbar.set_label(ctitle, **kw_units)
-
-    cbar.ax.set_title(
-        ctitle, horizontalalignment='left', x=-.2, y=1.01)
+        da.plot(
+            ax=ax, transform=ccrs.PlateCarree(),
+            robust=True, cmap=cmap,
+            cbar_ax=cbar_ax, zorder=1,
+            cbar_kwargs={
+                'shrink': .4,
+                'label': f'{da.name} [{da.units}]',
+                'extend': 'both'})
 
     kw_title = dict(fontsize=14, fontweight='roman', pad=10)
 
@@ -323,7 +337,7 @@ def plot_map(
         key: kwargs.get(key, value)
         for key, value in kw_title.items()}
 
-    title = f'{title}\n{date.strftime(r"%d-%m-%Y")}'
+    title = f'{title}\n{da.time.dt.strftime(r"%d-%m-%Y").values.squeeze()}'
 
     ax.set_title(title, **kw_title)
 
@@ -331,23 +345,21 @@ def plot_map(
 
     try:
 
-        xBathy, yBathy = m(lonBathy, latBathy)
+        bathy
 
     except NameError:
 
         extract_etopo_bathy()
 
-        xBathy, yBathy = m(lonBathy, latBathy)
-
     levels = [-2000, -1000, -200]
 
-    cs = m.contour(xBathy, yBathy, bathy,
-                   colors='0.6', levels=levels,
-                   linestyles='solid', linewidths=.8,
-                   zorder=2)
+    cs = ax.contour(lonBathy, latBathy, bathy,
+                    colors='0.', alpha=.5, levels=levels,
+                    linestyles='solid', linewidths=1,
+                    transform=ccrs.PlateCarree(), zorder=2)
 
     ax.clabel(cs, fmt='%1.0f m', inline=1,
-              inline_spacing=4, manual=False)
+              inline_spacing=8, manual=False)
 
     lonCSM, latCSM = -48.9, -28.6
 
@@ -355,16 +367,14 @@ def plot_map(
             latLim[0] < latCSM < latLim[1]):
 
         lonCSMtxt, latCSMtxt = -49.15, -28.6
-        xCSM, yCSM = m(lonCSM, latCSM)
-        xCSMtxt, yCSMtxt = m(lonCSMtxt, latCSMtxt)
 
-        m.plot(xCSM, yCSM,
-               marker='v', markersize=5,
-               markerfacecolor='r', markeredgecolor='w',
-               markeredgewidth=1.2, linestyle='None', zorder=5)
+        ax.plot(lonCSM, latCSM, transform=ccrs.PlateCarree(),
+                marker='v', markersize=5, markerfacecolor='r',
+                markeredgecolor='.1', markeredgewidth=.7,
+                linestyle='None', zorder=5)
 
-        m.ax.text(xCSMtxt, yCSMtxt, 'CSM', color='w',
-                  fontsize=13, ha='right', va='center')
+        ax.text(lonCSMtxt, latCSMtxt, 'CSM', transform=ccrs.PlateCarree(),
+                color='.3', fontsize=13, ha='right', va='center')
 
     lonCF, latCF = -42.05, -22.88
 
@@ -372,47 +382,77 @@ def plot_map(
             latLim[0] < latCF < latLim[1]):
 
         lonCFtxt, latCFtxt = -42.2, -22.82
-        xCF, yCF = m(lonCF, latCF)
-        xCFtxt, yCFtxt = m(lonCFtxt, latCFtxt)
 
-        m.plot(xCF, yCF,
-               marker='v', markersize=5,
-               markerfacecolor='r', markeredgecolor='w',
-               markeredgewidth=1.2, linestyle='None', zorder=5)
+        ax.plot(lonCF, latCF, transform=ccrs.PlateCarree(),
+                marker='v', markersize=5, markerfacecolor='r',
+                markeredgecolor='.1', markeredgewidth=.7,
+                linestyle='None', zorder=5)
 
-        m.ax.text(xCFtxt, yCFtxt, 'CF', color='w',
-                  fontsize=13, ha='right', va='bottom')
+        ax.text(lonCFtxt, latCFtxt, 'CF', transform=ccrs.PlateCarree(),
+                color='.3', fontsize=13, ha='right', va='bottom')
 
-    if False:
+    if SAVE:
 
         figname = f'figures/mursst_{date.strftime(r"%Y%m%d")}.png'
         fig.savefig(figname)
         plt.close()
 
-    return fig, ax, m
+    return fig, ax
 
 
-def spheric_gradient_mag(arr, lon, lat, deg2km=111.12):
+def _spheric_gradient_mag(arr, lon, lat, deg2km=111.12):
     """
     Computes the magnitude of the horizontal gradient vector
     in geographic-like spherical coordinates.
     """
     # deg2km = 111.12
-    # Mean latitude of the SST grid.
+
+    # Mean latitude of the SST grid in radians.
     mlat = np.mean(lat * np.pi / 180.)
+
     # Mean zonal spacing of grid.
     dx = deg2km * np.cos(mlat) * np.mean(np.diff(lon,  axis=0))
+
     # Exact meridional spacing of grid.
-    dy = deg2km*np.mean(np.diff(lat, axis=0))
+    dy = deg2km * np.mean(np.diff(lat, axis=0))
 
     # Horizontal gradient.
     gx, gy = np.gradient(arr, dx, dy)
+
     g2 = gx**2 + gy**2
 
     return g2
 
 
+def spheric_gradient_mag(arr, dim=['lon', 'lat'], deg2km=111.12):
+    """
+    Computes the magnitude of the horizontal gradient vector
+    in geographic-like spherical coordinates.
+    """
+    # deg2km = 111.12
+
+    # Mean latitude of the SST grid in radians.
+    mlat = np.mean(lat * np.pi / 180.)
+
+    print(mlat)
+
+    # # Mean zonal spacing of grid.
+    # dx = deg2km * np.cos(mlat) * np.mean(np.diff(lon,  axis=0))
+
+    # # Exact meridional spacing of grid.
+    # dy = deg2km * np.mean(np.diff(lat, axis=0))
+
+    # # Horizontal gradient.
+    # gx, gy = np.gradient(arr, dx, dy)
+
+    # g2 = gx**2 + gy**2
+
+    # return g2
+
+
 if __name__ == "__main__":
+
+    import json
 
     with open(
             '/'.join([os.getcwd(), 'inputDownload.json'])) as finput:
@@ -423,8 +463,6 @@ if __name__ == "__main__":
         lonLim = parsed_json['lon']
         latLim = parsed_json['lat']
 
-    fnames = select_files(date)
-
     lonLim = [float(l) for l in lonLim]
     latLim = [float(l) for l in latLim]
 
@@ -432,20 +470,39 @@ if __name__ == "__main__":
     lonLim.sort()
     latLim.sort()
 
-    lSST = temperature_limits()
+    fnames = select_files(date)
 
-    for fname in fnames:
+    # lSST = temperature_limits(date)
 
-        date, lon, lat, sst = load_image(fname)
+    # for fname in fnames:
 
-        fig, ax, m = plot_map(
-            date, lon, lat, sst,
-            title='Temperatura da Superfície do Mar',
-            ctitle=r'[°C]')
+    #     # date, lon, lat, sst = load_image_netCDF(fname)
+    #     sst = load_image_xarray(fname)
 
-        sstgrad = spheric_gradient_mag(sst, lon, lat)
+    #     fig, ax = plot_data(
+    #         sst,
+    #         title='Temperatura da Superfície do Mar')
 
-        fig1, ax1, m1 = plot_map(
-            date, lon, lat, sstgrad,
-            title='Gradiente da Temperatura da Superfície do Mar',
-            ctitle=r'[°C$^2$ km$^{-2}$]')
+    #     sstgrad = spheric_gradient_mag(
+    #         sst.values.squeeze(), sst.lon.values, sst.lat.values)
+
+    #     sstgrad = xr.DataArray(
+    #         sstgrad[np.newaxis, ...],
+    #         name='gradient_mag_sst',
+    #         dims=['time', 'lat', 'lon'],
+    #         coords={'time': sst.time,
+    #                 'lat': sst.lat,
+    #                 'lon': sst.lon},
+    #         attrs={'units': r'degC$^2$ km$^{-2}$',
+    #                'long_name': 'magnitude of horizontal gradient'})
+
+    #     fig1, ax1 = plot_data(
+    #         sstgrad,
+    #         title='Gradiente da Temperatura da Superfície do Mar')
+
+    ds = load_image_xarray(fnames)
+
+    lSST = (
+        ds.min(['lat', 'lon']).values.mean(),
+        ds.max(['lat', 'lon']).values.mean(),
+    )

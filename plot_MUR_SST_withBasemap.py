@@ -1,6 +1,5 @@
 # -*- coding: utf-8 -*-
 import os
-import json
 from datetime import datetime
 import netCDF4 as nc
 import xarray as xr
@@ -57,7 +56,7 @@ def linear_scale(data, scale_factor, offset):
     return (scale_factor * data + offset)
 
 
-def load_image(fname, K2degC=273.15, scale=False):
+def load_image_netCDF(fname, K2degC=273.15, scale=False):
     """
     Load MUR dataset Sea Surface Temperatura from a netCDF file.
     """
@@ -94,23 +93,19 @@ def load_image(fname, K2degC=273.15, scale=False):
 
 
 def load_image_xrarray(fname, K2degC=273.15):
+    # import xarray as xr
+
+    # mur = xr.open_dataset(fname, mur.mask_and_scale=True)
+    # mur.values, mur.var,  mur.dims, mur.coords, mur.attrs
+    # mur = dataset.analysed_sst
 
     dataset = xr.open_dataset(fname)
 
     sst = dataset['analysed_sst'].sel(
-        lat=slice(*latLim), lon=slice(*lonLim)).drop('time') - K2degC
+        lat=slice(*latLim), lon=slice(*lonLim)
+        ).drop('time') - K2degC
 
     return lon, lat, sst
-
-
-def get():
-    import xarray as xr
-    # mur = xr.open_dataset(fname, mur.mask_and_scale=True)
-    # mur.values, mur.var,  mur.dims, mur.coords, mur.attrs
-    sst = mur.analysed_sst
-    sst = sst.sel(
-        lat=slice(*latLim), lon=slice(*lonLim)).dropna(dim='time') - 273.15
-    return None
 
 
 def temperature_limits(days=None, fpath='MURdata/'):
@@ -179,7 +174,7 @@ def extract_etopo_bathy(
 
     with gzip.open(fname) as gzfile:
         with nc.Dataset(
-            'justagzfakename', mode='r', memory=gzfile.read()
+            'justafakename', mode='r', memory=gzfile.read()
         ) as ncfile:
             dxdy = ncfile['spacing'][0]
             lon = np.arange(*ncfile['x_range'][:] + [0, dxdy], dxdy)
@@ -230,7 +225,7 @@ def get_cube(fname='../etopo1/ETOPO1_Ice_g_gdal.grd.gz'):
     return bathy
 
 
-def make_map(**kwargs):
+def make_basemap(projection='merc', resolution='c', **kwargs):
 
     kw_fig = dict(figsize=(8, 6), facecolor='w')
 
@@ -244,8 +239,8 @@ def make_map(**kwargs):
                 llcrnrlat=latLim[0] - 1e-7,
                 urcrnrlon=lonLim[1],
                 urcrnrlat=latLim[1] + 1e-7,
-                projection='merc',
-                resolution='h',
+                projection=projection,
+                resolution=resolution,
                 area_thresh=10)
 
     m.ax = ax
@@ -269,7 +264,7 @@ def make_map(**kwargs):
     return fig, ax, m
 
 
-def plot_map(
+def plot_data(
         date, lon, lat, sst,
         title=None, ctitle=None,
         lSST=(None, None), **kwargs):
@@ -277,7 +272,7 @@ def plot_map(
     # kwargs = dict(figsize=(10, 8), facecolor='w')
     # fig, ax, m = make_map(**kwargs)
 
-    fig, ax, m = make_map()
+    fig, ax, m = make_basemap(resolution='h')
 
     fig.subplots_adjust(left=.03)
 
@@ -342,7 +337,7 @@ def plot_map(
     levels = [-2000, -1000, -200]
 
     cs = m.contour(xBathy, yBathy, bathy,
-                   colors='0.6', levels=levels,
+                   colors='0.', levels=levels,
                    linestyles='solid', linewidths=.8,
                    zorder=2)
 
@@ -398,21 +393,27 @@ def spheric_gradient_mag(arr, lon, lat, deg2km=111.12):
     in geographic-like spherical coordinates.
     """
     # deg2km = 111.12
-    # Mean latitude of the SST grid.
+
+    # Mean latitude of the SST grid in radians.
     mlat = np.mean(lat * np.pi / 180.)
+
     # Mean zonal spacing of grid.
     dx = deg2km * np.cos(mlat) * np.mean(np.diff(lon,  axis=0))
+
     # Exact meridional spacing of grid.
-    dy = deg2km*np.mean(np.diff(lat, axis=0))
+    dy = deg2km * np.mean(np.diff(lat, axis=0))
 
     # Horizontal gradient.
     gx, gy = np.gradient(arr, dx, dy)
+
     g2 = gx**2 + gy**2
 
     return g2
 
 
 if __name__ == "__main__":
+
+    import json
 
     with open(
             '/'.join([os.getcwd(), 'inputDownload.json'])) as finput:
@@ -423,8 +424,6 @@ if __name__ == "__main__":
         lonLim = parsed_json['lon']
         latLim = parsed_json['lat']
 
-    fnames = select_files(date)
-
     lonLim = [float(l) for l in lonLim]
     latLim = [float(l) for l in latLim]
 
@@ -432,20 +431,23 @@ if __name__ == "__main__":
     lonLim.sort()
     latLim.sort()
 
-    lSST = temperature_limits()
+    fnames = select_files(date)
+
+    lSST = temperature_limits(date)
 
     for fname in fnames:
 
-        date, lon, lat, sst = load_image(fname)
+        date, lon, lat, sst = load_image_netCDF(fname)
+        # date, lon, lat, sst = load_image_xarray(fname)
 
-        fig, ax, m = plot_map(
+        fig, ax, m = plot_data(
             date, lon, lat, sst,
             title='Temperatura da Superfície do Mar',
             ctitle=r'[°C]')
 
         sstgrad = spheric_gradient_mag(sst, lon, lat)
 
-        fig1, ax1, m1 = plot_map(
+        fig1, ax1, m1 = plot_data(
             date, lon, lat, sstgrad,
             title='Gradiente da Temperatura da Superfície do Mar',
             ctitle=r'[°C$^2$ km$^{-2}$]')
